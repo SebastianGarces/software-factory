@@ -1,0 +1,134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Software Factory Feature Specification",
+  "description": "Input specification for the software factory pipeline",
+  "type": "object",
+  "required": ["name", "description"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Short name for the feature (used in file/branch naming)"
+    },
+    "description": {
+      "type": "string",
+      "description": "Natural language description of what to build. Can be a product brief, user story, or technical spec."
+    },
+    "product": {
+      "type": "string",
+      "description": "Target product/repo name (for multi-product setups)"
+    },
+    "pattern": {
+      "type": "string",
+      "enum": ["crud_ui", "integration", "workflow", "analytics", "custom"],
+      "description": "Feature pattern type. Helps the factory select appropriate templates."
+    },
+    "entity": {
+      "type": "string",
+      "description": "Primary entity name (PascalCase). E.g., 'PaymentMethod'"
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "kind"],
+        "properties": {
+          "name": { "type": "string" },
+          "kind": { "type": "string", "enum": ["string", "number", "boolean", "enum", "date", "json", "reference"] },
+          "values": { "type": "array", "items": { "type": "string" } },
+          "required": { "type": "boolean", "default": true },
+          "sensitive": { "type": "boolean", "default": false },
+          "default": {}
+        }
+      },
+      "description": "Field definitions for the primary entity"
+    },
+    "permissions": {
+      "type": "string",
+      "description": "Permission string required to access this feature"
+    },
+    "audit": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether to add audit logging for changes"
+    },
+    "integrations": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "External services to integrate with"
+    },
+    "ui": {
+      "type": "object",
+      "properties": {
+        "list": { "type": "boolean", "default": true },
+        "detail": { "type": "boolean", "default": true },
+        "form": { "type": "boolean", "default": true },
+        "search": { "type": "boolean", "default": false },
+        "export": { "type": "boolean", "default": false }
+      },
+      "description": "UI components to generate"
+    },
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "max_iterations": { "type": "number", "default": 5 },
+        "max_turns_per_phase": { "type": "number", "default": 50 },
+        "target_branch": { "type": "string", "default": "main" },
+        "ci_command": { "type": "string", "description": "Command to run CI checks. E.g., 'npm test && npm run lint'" }
+      },
+      "description": "Override factory defaults"
+    },
+    "design": {
+      "type": "object",
+      "properties": {
+        "penFile": {
+          "type": "string",
+          "description": "Path to an existing Pencil .pen file. If provided, designs are ingested from this file. If omitted, new designs are generated via Pencil."
+        },
+        "topic": {
+          "type": "string",
+          "enum": ["web-app", "mobile-app", "landing-page", "design-system"],
+          "default": "web-app",
+          "description": "Design topic for Pencil guidelines and style generation"
+        },
+        "styleTags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Style tags for Pencil style guide (e.g., ['calm', 'modern', 'webapp'])"
+        },
+        "styleGuide": {
+          "type": "string",
+          "description": "Optional Pencil style guide name to apply"
+        },
+        "maxDesignIterations": {
+          "type": "number",
+          "default": 3,
+          "description": "Max design iteration attempts for design gate failures"
+        },
+        "designBrief": {
+          "type": "string",
+          "description": "Optional additional design direction (tone, style references, brand constraints). E.g., 'Clean SaaS dashboard like Linear. Muted teal palette with editorial typography.'"
+        }
+      },
+      "description": "Pencil design integration. When present, enables the design phase which generates or ingests UI designs from Pencil before architecture."
+    },
+    "preview": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to enable live preview for this project. Set to false for non-web projects (libraries, CLI tools)."
+        },
+        "frontendPort": {
+          "type": "number",
+          "description": "Override the default frontend port (default: 3000)"
+        },
+        "backendPort": {
+          "type": "number",
+          "description": "Override the default backend port (default: 8080)"
+        }
+      },
+      "description": "Live preview configuration. Allows specs to override default ports or disable preview entirely for non-web projects."
+    }
+  }
+}

@@ -1,0 +1,16 @@
+# Runtime state (generated per-run)
+.factory/
+
+# OS
+.DS_Store
+
+# Node
+node_modules/
+
+# Generated projects (factory output)
+frontend/
+config/
+
+# Environment
+.env
+.env.local

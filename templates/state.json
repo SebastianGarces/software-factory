@@ -1,0 +1,85 @@
+{
+  "factory_version": "1.0.0",
+  "spec_file": "",
+  "project_dir": "",
+  "current_phase": "intake",
+  "phases": {
+    "intake": {
+      "status": "pending",
+      "session_id": "",
+      "iterations": 0,
+      "started_at": "",
+      "completed_at": ""
+    },
+    "research": {
+      "status": "pending",
+      "session_id": "",
+      "iterations": 0,
+      "started_at": "",
+      "completed_at": ""
+    },
+    "design": {
+      "status": "pending",
+      "session_id": "",
+      "iterations": 0,
+      "started_at": "",
+      "completed_at": "",
+      "pen_file": "",
+      "screens_generated": 0,
+      "path": ""
+    },
+    "architecture": {
+      "status": "pending",
+      "session_id": "",
+      "iterations": 0,
+      "started_at": "",
+      "completed_at": ""
+    },
+    "planning": {
+      "status": "pending",
+      "session_id": "",
+      "iterations": 0,
+      "started_at": "",
+      "completed_at": ""
+    },
+    "implementation": {
+      "status": "pending",
+      "session_id": "",
+      "iterations": 0,
+      "started_at": "",
+      "completed_at": "",
+      "tasks_total": 0,
+      "tasks_completed": 0
+    },
+    "verification": {
+      "status": "pending",
+      "session_id": "",
+      "iterations": 0,
+      "started_at": "",
+      "completed_at": ""
+    },
+    "pr_assembly": {
+      "status": "pending",
+      "session_id": "",
+      "iterations": 0,
+      "started_at": "",
+      "completed_at": ""
+    }
+  },
+  "gates": {
+    "research": { "passed": false, "feedback": "", "evaluated_at": "" },
+    "design": { "passed": false, "feedback": "", "evaluated_at": "" },
+    "architecture": { "passed": false, "feedback": "", "evaluated_at": "" },
+    "plan": { "passed": false, "feedback": "", "evaluated_at": "" },
+    "implementation": { "passed": false, "feedback": "", "evaluated_at": "" },
+    "verification": { "passed": false, "feedback": "", "evaluated_at": "" }
+  },
+  "reroutes": [],
+  "alerts": [],
+  "cycle_detection": {},
+  "max_iterations_per_phase": 5,
+  "started_at": "",
+  "updated_at": "",
+  "completed_at": "",
+  "final_verdict": ""
+}

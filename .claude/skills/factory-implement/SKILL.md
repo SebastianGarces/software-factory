@@ -7,12 +7,10 @@ You are running the **Implementation Phase** of the software factory as a standa
 
 ## Prerequisites
 
-These files must exist:
-- `.factory/artifacts/research.md`
-- `.factory/artifacts/architecture.md`
+This file must exist:
 - `.factory/artifacts/plan.md`
 
-If any are missing, tell the user which prerequisite phase to run first.
+If missing, tell the user to run `/factory` or the planning phase first.
 
 ## Input
 
@@ -30,7 +28,7 @@ If any are missing, tell the user which prerequisite phase to run first.
 
    a. Check if the task's dependencies are completed (look for `.factory/artifacts/tasks/task-{dep-id}-complete.md`)
 
-   b. Spawn the `@implementer` agent in a worktree:
+   b. Spawn the `@implementer` agent:
    ```
    Execute Task {id}: {name} from .factory/artifacts/plan.md.
    Follow TDD: write failing tests first, implement to pass, then refactor.
@@ -39,23 +37,19 @@ If any are missing, tell the user which prerequisite phase to run first.
 
    c. After the implementer finishes, run tests:
    ```bash
-   npm test  # or equivalent
+   bun test
    ```
 
    d. If tests fail, re-run the implementer with the test output as feedback. Max 3 retries per task.
 
-   e. If a `reroute.json` is written, stop and inform the user that the architecture needs changes.
+   e. If a `reroute.json` is written, stop and inform the user that the plan needs changes.
 
 4. **After all tasks complete**, run the full suite:
 ```bash
-npm test && npm run lint && npx tsc --noEmit  # or equivalent
+bun test && bun run lint && bunx tsc --noEmit
 ```
 
 5. **Report results** to the user.
-
-## Parallel Execution
-
-If multiple tasks have no dependencies between them, spawn them in parallel using Agent Teams (requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`). Each implementer works in its own worktree to avoid conflicts.
 
 ## Output
 

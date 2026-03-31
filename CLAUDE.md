@@ -1,33 +1,42 @@
 # Software Factory
 
-This is an autonomous software factory built on Claude Code's agent infrastructure. It takes a feature specification and produces a deployable pull request without human intervention until final review.
+An autonomous web app factory built on Claude Code's agent infrastructure. Takes a feature spec, produces a complete, tested, committed TypeScript web app.
+
+**Stack:** Bun, TypeScript, Next.js App Router, SQLite/Drizzle, shadcn/ui, Tailwind, Motion, Vitest
 
 ## Project Structure
 
 ```
-.claude/agents/     — Agent personas (orchestrator, researcher, designer, architect, implementer, reviewer)
-.claude/skills/     — Skills (slash commands: /factory, /factory-research, etc.)
-.claude/hooks/      — Quality gate hooks
-scripts/            — Bash runner scripts for persistence and overnight execution
-templates/          — State, spec schema, and gate criteria templates
+.claude/agents/     — 3 agent personas (planner, implementer, verifier)
+.claude/skills/     — Skills (slash commands: /factory, /factory-implement, /factory-verify)
+ts/                 — TypeScript runner (Bun + Claude Agent SDK)
+frontend/           — Next.js monitoring dashboard (optional)
+templates/          — State schema and gate criteria
 ```
 
 ## How It Works
 
-1. User provides a feature spec (JSON or natural language)
+1. User provides a feature spec (JSON, markdown, or natural language)
 2. `/factory` skill initializes the pipeline
-3. Orchestrator coordinates: research → design → architecture → planning → implementation → verification → PR
-4. Each phase runs as an isolated `claude -p` call with its own session
+3. **3-phase pipeline:** planning → implementation → verification
+4. Each phase runs as a `query()` call via the Claude Agent SDK
 5. Quality gates (Stop hooks) evaluate output after each phase
-6. Failed gates route back to the appropriate phase with feedback (max 5 iterations)
-7. Final output: a clean PR ready for human review
+6. Failed gates retry with feedback (max 10 iterations)
+7. Verification FAIL auto-reroutes to implementation with fix instructions
+8. On PASS: verifier creates README.md, QA.md, and commits
+
+## The 3 Agents
+
+- **Planner** — Produces `plan.md` with data model, API routes, component tree, visual design, and TDD task list. Stack is hardcoded so planning is fast.
+- **Implementer** — Executes tasks from plan.md via Red-Green-Refactor TDD. Has embedded frontend skill for visual quality. Stack-specialized (knows shadcn, Drizzle, Motion, etc.)
+- **Verifier** — Runs tests/lint/typecheck, reviews code quality and UI, tests in browser via agent-browser. On PASS creates README.md, QA.md, commits. On FAIL routes back to implementer.
 
 ## Key Conventions
 
-- **Artifacts**: Each phase writes its output to `.factory/artifacts/`
+- **Artifacts**: Each phase writes to `.factory/artifacts/` (plan.md, task reports, review.md)
 - **State**: Pipeline state tracked in `.factory/state.json`
 - **Heartbeat**: Phases touch `.factory/heartbeat` to signal liveness
-- **Reroutes**: Implementation blockers write `.factory/reroute.json` to request architecture changes
+- **Reroutes**: Implementation blockers write `.factory/reroute.json`
 - **Gate criteria**: Defined in `templates/gate-criteria.md`
 
 ## Running the Factory
@@ -35,41 +44,21 @@ templates/          — State, spec schema, and gate criteria templates
 ### Interactive (within Claude Code)
 ```
 /factory path/to/spec.json
+/factory "Build a todo app with drag-and-drop"
 ```
 
-### Overnight (unattended)
+### Programmatic (via TS runner)
 ```bash
-# In tmux
-./scripts/factory-heartbeat.sh path/to/spec.json
+bun run ts/src/index.ts spec.json /path/to/project
+
+# With watchdog
+bun run ts/src/heartbeat.ts spec.json /path/to/project
+
+# Monitoring
+bun run ts/src/monitor/watch.ts /path/to/project
+bun run ts/src/monitor/status.ts /path/to/project
+bun run ts/src/monitor/tail.ts /path/to/project
 
 # As macOS service
-./scripts/factory-install.sh path/to/spec.json
+bun run ts/src/install.ts spec.json /path/to/project
 ```
-
-## Pencil Design Integration
-
-The factory integrates with Pencil (via MCP) for UI design generation:
-
-- Add a `design` object to your spec to enable the design phase
-- **Path A**: No `penFile` → factory generates designs via Pencil from research + spec
-- **Path B**: With `penFile` → factory ingests existing Pencil file designs
-- Design artifacts (`.pen` file, screenshots, design system, manifest) constrain the architect and implementer
-- Architecture and implementation phases get read-only Pencil MCP access to query `design.pen` for precise values
-- Standalone: `/factory-design` runs just the design phase
-
-```json
-{
-  "name": "my-feature",
-  "description": "...",
-  "design": {
-    "topic": "web-app",
-    "styleTags": ["calm", "modern", "webapp"],
-    "designBrief": "Clean SaaS dashboard like Linear"
-  }
-}
-```
-
-## Agent Teams
-
-Implementation phase uses experimental Agent Teams for parallel task execution.
-Requires: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`

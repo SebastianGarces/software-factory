@@ -2,7 +2,11 @@
 
 ## System Overview
 
-The factory is a two-layer system: a **bash orchestration layer** manages state, retries, and process lifecycle, while an **agent layer** performs the actual work through Claude Code sessions.
+The factory is a three-layer system:
+
+1. **TypeScript orchestration layer** (`ts/src/`) manages state, retries, process lifecycle, and phase sequencing
+2. **Agent layer** performs the actual work through Claude Code sessions invoked via the Agent SDK's `query()` function
+3. **Monitoring layer** provides CLI tools and an optional Next.js web dashboard for observability
 
 ```
                          ┌─────────────────────┐
@@ -12,102 +16,86 @@ The factory is a two-layer system: a **bash orchestration layer** manages state,
                          └──────────┬──────────┘
                                     │
               ┌─────────────────────▼─────────────────────┐
-              │          factory-heartbeat.sh              │
+              │            heartbeat.ts                    │
               │  Watchdog: checks liveness every 30s,     │
               │  restarts stalled processes (max 5x),     │
               │  cleans up orphaned claude sessions        │
               └─────────────────────┬─────────────────────┘
                                     │ spawns & monitors
               ┌─────────────────────▼─────────────────────┐
-              │           factory-runner.sh                │
+              │              factory.ts                    │
               │  Orchestrator: normalizes input, runs      │
-              │  each phase as isolated `claude -p` call,  │
+              │  each phase as isolated query() call,      │
               │  evaluates gates, handles retries/reroutes │
               └─────────────────────┬─────────────────────┘
-                                    │ one session per phase
+                                    │ one query() per phase
     ┌───────────────────────────────▼──────────────────────────────┐
-    │                    PIPELINE (8 phases)                       │
+    │                    PIPELINE (3 phases)                       │
     │                                                              │
-    │  INTAKE ──▶ RESEARCH ──▶ DESIGN* ──▶ ARCHITECTURE           │
-    │                                           │                  │
-    │                                      ◀── GATE ──▶           │
-    │                                     pass         fail        │
-    │                                      │        retry with     │
-    │                                      ▼        feedback       │
-    │                                   PLANNING                   │
-    │                                      │                       │
-    │                                      ▼                       │
-    │                               IMPLEMENTATION                 │
-    │                                      │                       │
-    │                        ┌──────── GATE ────────┐              │
-    │                        │ pass            fail  │              │
-    │                        ▼             retry or  │              │
-    │                   VERIFICATION      reroute to │              │
-    │                        │            architect  │              │
-    │                   ┌── GATE ──┐                 │              │
-    │                   │pass  fail│                 │              │
-    │                   ▼      │   │                 │              │
-    │              PR ASSEMBLY  └──▶ back to impl   │              │
-    │                                                              │
-    │                    * Design phase is optional                 │
+    │  PLANNING ──▶ IMPLEMENTATION ──▶ VERIFICATION               │
+    │      │              │                  │                     │
+    │   plan.md    code + tests         review.md                 │
+    │                                   README.md                 │
+    │              ┌──── GATE ────┐      QA.md                    │
+    │              │pass      fail│     commit                    │
+    │              ▼         ▼    │                                │
+    │          VERIFY    reroute  │                                │
+    │              │     to impl  │                                │
+    │         ┌── GATE ──┐       │                                │
+    │         │pass  fail│       │                                │
+    │         ▼      └───▶ back  │                                │
+    │        DONE    to impl     │                                │
     └──────────────────────────────────────────────────────────────┘
                                     │
-                                    ▼
-                              Pull Request
+                         ┌──────────▼──────────┐
+                         │  .factory/ on disk   │◀── read by monitoring
+                         └─────────────────────┘
 ```
 
 ## Agent Architecture
 
-Each phase is executed by a specialized agent persona running in its own `claude -p` session. Agents have no shared context — they communicate exclusively through artifacts on disk.
+Each phase is executed by a specialized agent persona running in its own `query()` session. Agents have no shared context — they communicate exclusively through artifacts on disk.
 
 ```
 ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│ ORCHESTRATOR │  │  RESEARCHER  │  │   DESIGNER   │
-│   (opus)     │  │  (sonnet)    │  │   (opus)     │
+│   PLANNER    │  │ IMPLEMENTER  │  │   VERIFIER   │
+│   (opus)     │  │   (opus)     │  │   (opus)     │
 │              │  │              │  │              │
-│  all tools   │  │  read-only   │  │  Pencil MCP  │
-│  intake +    │  │  explores    │  │  generates   │
-│  PR assembly │  │  codebase    │  │  UI designs  │
+│  read-only   │  │  full tools  │  │  read-only   │
+│  researches  │  │  sub-agents  │  │  runs tests  │
+│  + plans     │  │  + worktrees │  │  + reviews   │
 └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
        │                 │                 │
        ▼                 ▼                 ▼
-  branch setup       research.md      design.pen
-  README.md                           design-system.md
-  QA.md                               design-manifest.json
-  git commits                         screenshots/
-
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│  ARCHITECT   │  │ IMPLEMENTER  │  │   REVIEWER   │
-│   (opus)     │  │  (sonnet)    │  │   (sonnet)   │
-│              │  │              │  │              │
-│  read-only   │  │  full tools  │  │  read + bash │
-│  designs     │  │  TDD cycle   │  │  runs tests  │
-│  solutions   │  │  worktree    │  │  checks QA   │
-└──────┬───────┘  └──────┬───────┘  └──────┬───────┘
-       │                 │                 │
-       ▼                 ▼                 ▼
- architecture.md     code + tests      review.md
- plan.md             task reports
+   plan.md          code + tests      review.md
+                    task reports       README.md
+                                      QA.md
+                                      git commit
 ```
 
 ### Tool Isolation
 
 Agents are restricted to specific tools to enforce separation of concerns:
 
-| Agent | Read | Edit/Write | Bash | Grep/Glob | Agent | Web | Pencil MCP |
-|-------|------|------------|------|-----------|-------|-----|------------|
-| Orchestrator | yes | yes | yes | yes | yes | yes | — |
-| Researcher | yes | — | yes | yes | yes | yes | — |
-| Designer | — | — | — | — | — | — | full |
-| Architect | yes | — | yes | yes | yes | — | read-only* |
-| Implementer | yes | yes | yes | yes | yes | yes | read-only* |
-| Reviewer | yes | — | yes | yes | yes | — | — |
+| Agent | Read | Edit/Write | Bash | Grep/Glob | Agent | Web |
+|-------|------|------------|------|-----------|-------|-----|
+| Planner | yes | — | yes | yes | yes | yes |
+| Implementer | yes | yes | yes | yes | yes | yes |
+| Verifier | yes | — | yes | yes | yes | yes |
 
-*Read-only Pencil access only when `design.pen` exists.
+The planner and verifier are read-only for source code — they plan and evaluate but never modify. The implementer has full tool access and spawns sub-agents with `isolation: "worktree"` for parallel task execution.
+
+### Agent Consolidation
+
+The current 3-agent system is a consolidation of an earlier 6-agent design:
+
+- **Planner** = researcher + architect + planner. One agent can survey the codebase and produce a complete plan in a single context window, avoiding lossy artifact handoffs.
+- **Verifier** = reviewer + PR assembler. Review and commit are naturally sequential in the same session.
+- **Orchestrator** was replaced by TypeScript code (`factory.ts`) — deterministic logic doesn't need an LLM.
 
 ## Artifact Flow
 
-Phases communicate through artifacts in `.factory/artifacts/`. Each phase reads upstream artifacts and writes exactly one primary output. No phase modifies another's artifacts.
+Phases communicate through artifacts in `.factory/artifacts/`. Each phase reads upstream artifacts and writes exactly one primary output.
 
 ```
                     ┌────────────────┐
@@ -116,55 +104,64 @@ Phases communicate through artifacts in `.factory/artifacts/`. Each phase reads 
                             │ read by all phases
                             ▼
 ┌───────────┐      ┌────────────────┐
-│  INTAKE   │─────▶│  git branch    │
-└───────────┘      └────────────────┘
-                            │
-                            ▼
-┌───────────┐      ┌────────────────┐
-│ RESEARCH  │─────▶│  research.md   │──────────────────┐
-└───────────┘      └────────────────┘                  │
-                            │                          │
-                            ▼                          │
-┌───────────┐      ┌────────────────┐                  │
-│  DESIGN   │─────▶│  design.pen    │                  │
-│ (optional)│      │  design-system │                  │
-│           │      │  manifest.json │                  │
-│           │      │  screenshots/  │                  │
-└───────────┘      └───────┬────────┘                  │
-                           │                           │
-                           ▼                           ▼
-┌───────────┐      ┌────────────────┐    reads research +
-│ARCHITECTURE│────▶│architecture.md │    design artifacts
+│ PLANNING  │─────▶│   plan.md      │
 └───────────┘      └───────┬────────┘
                            │
                            ▼
 ┌───────────┐      ┌────────────────┐
-│ PLANNING  │─────▶│   plan.md      │
-└───────────┘      └────────────────┘
-                           │
-                           ▼
-┌───────────┐      ┌────────────────┐    reads research +
-│  IMPLEMENT│─────▶│  source code   │    architecture +
-│           │      │  tests         │    plan + design
+│  IMPLEMENT│─────▶│  source code   │    reads plan.md
+│           │      │  tests         │
 │           │      │  task reports  │
-└───────────┘      └────────────────┘
+└───────────┘      └───────┬────────┘
                            │
                            ▼
 ┌───────────┐      ┌────────────────┐    reads all upstream
 │  VERIFY   │─────▶│  review.md     │    artifacts + runs
-└───────────┘      └────────────────┘    tests
-                           │
-                           ▼
-┌───────────┐      ┌────────────────┐
-│PR ASSEMBLY│─────▶│  README.md     │
+│           │      │  README.md     │    tests
 │           │      │  QA.md         │
-│           │      │  git commits   │
+│           │      │  git commit    │
 └───────────┘      └────────────────┘
 ```
 
+## The `query()` Interface
+
+Each phase runs as a separate `query()` call via the Claude Agent SDK. This replaced the earlier approach of spawning `claude -p` CLI processes.
+
+```typescript
+import { query } from "@anthropic-ai/claude-agent-sdk";
+
+const queryResult = query({ prompt, options });
+
+// query() returns an AsyncGenerator that yields messages
+for await (const message of queryResult) {
+  // Each message: { type, message, session_id, ... }
+  // Types: "assistant" | "result" | "user" | "tool_result"
+  await appendFile(streamFile, JSON.stringify(message) + "\n");
+}
+```
+
+### Options
+
+```typescript
+const options: Options = {
+  abortController,                     // Timeout and staleness abort
+  allowedTools,                        // Phase-specific tool whitelist
+  permissionMode: "bypassPermissions", // Unattended execution
+  model,                               // "opus" or "sonnet"
+  cwd: projectDir,                     // Working directory
+  hooks: {
+    Stop: [{ hooks: [stopHook] }],          // Gate check on Stop tool
+    PostToolUse: [{ hooks: [heartbeatHook] }], // Heartbeat update
+  },
+  maxTurns,                            // Optional turn limit
+};
+```
+
+No two phases share a context window. This prevents context overflow and enforces phase boundaries.
+
 ## State Machine
 
-All pipeline state lives in `.factory/state.json`. The runner updates it atomically (write to `.tmp`, then `mv`) so concurrent readers (dashboard, status checks) never see partial writes.
+All pipeline state lives in `.factory/state.json`. The orchestrator updates it atomically (write to `.tmp`, then rename) so concurrent readers never see partial writes.
 
 ### Phase Lifecycle
 
@@ -179,55 +176,53 @@ pending ──▶ in_progress ──▶ completed
                │
                ▼ (after MAX_ITERATIONS)
            force-advanced to completed
-           (logged to decisions.md)
+           (logged as alert in state.json)
 ```
 
-### State Schema
+### State Schema (v2.0.0)
 
 ```json
 {
   "factory_version": "1.0.0",
   "current_phase": "implementation",
   "phases": {
-    "<phase_name>": {
-      "status": "pending | in_progress | completed | failed",
-      "session_id": "factory-research-1710950400",
-      "iterations": 2,
-      "started_at": "2026-03-20T15:30:00Z",
-      "completed_at": "2026-03-20T15:45:00Z"
-    }
+    "planning":       { "status": "completed", "iterations": 1, ... },
+    "implementation": { "status": "in_progress", "iterations": 2, ... },
+    "verification":   { "status": "pending", "iterations": 0, ... }
   },
   "gates": {
-    "<gate_name>": {
-      "passed": true,
-      "feedback": "error message if failed",
-      "evaluated_at": "2026-03-20T15:45:00Z"
-    }
+    "plan":           { "passed": true, "feedback": "", ... },
+    "implementation": { "passed": false, "feedback": "...", ... },
+    "verification":   { "passed": false, "feedback": "", ... }
   },
   "reroutes": [],
+  "alerts": [],
   "cycle_detection": {},
-  "max_iterations_per_phase": 5
+  "max_iterations_per_phase": 10
 }
 ```
 
 ## Quality Gates
 
-Every phase (except intake and PR assembly) has a quality gate — a programmatic check that runs after the agent finishes. Gates are implemented in two places:
+Every phase has a quality gate — a programmatic check that runs after the agent finishes. Gates operate at two levels:
 
-1. **Stop hook** (`gate-check.sh`): Runs inside the `claude -p` session. Returns `exit 2` to block the agent from stopping, forcing it to continue and fix its output. Has a self-limiting block counter to prevent infinite loops.
+### 1. SDK Stop Hooks (in-process)
 
-2. **Runner evaluation** (`evaluate_gate` in `factory-runner.sh`): Runs after the session ends. Updates state with pass/fail + feedback, decides whether to retry the phase or advance.
+Implemented in `ts/src/hooks.ts`. When the agent calls the Stop tool, the hook intercepts and checks gate criteria via `checkGateForStopHook()`. If the gate fails, the hook returns `{ decision: "block", reason: "..." }` — the agent continues in the same session with full context.
+
+A self-limiting block counter (`.gate-blocks-{phase}`) prevents infinite loops. After `MAX_GATE_BLOCKS` (default 10) consecutive blocks, the hook allows the stop.
+
+### 2. Post-Session Evaluation
+
+Implemented in `ts/src/gates.ts`. After the `query()` session ends, `evaluateGate()` runs the same checks and updates `state.json` with pass/fail + feedback. This determines whether to advance to the next phase or retry.
 
 ### Gate Criteria
 
 | Gate | Checks |
 |------|--------|
-| **Research** | `research.md` exists, has Codebase Profile + Conventions + Integration Points sections, cites 3+ real file paths, has Required Screens section if design is configured |
-| **Design** | `design.pen` + `design-manifest.json` + `design-system.md` exist, design system is >200 bytes, screen screenshots exported |
-| **Architecture** | `architecture.md` exists, has Data Model + API Contract sections, >500 bytes |
-| **Plan** | `plan.md` exists, has Task definitions + Acceptance Criteria + TDD Specs |
-| **Implementation** | Task completion reports exist for all planned tasks |
-| **Verification** | `review.md` exists with a clear PASS or FAIL verdict |
+| **Plan** | `plan.md` exists, >1000 bytes, contains Data Model + API/Routes + Components + Tasks + Acceptance Criteria + TDD specs |
+| **Implementation** | Task completion reports (`task-*-complete.md`) exist for all planned tasks |
+| **Verification** | `review.md` exists with "Verdict: PASS", `README.md` and `QA.md` exist in project root |
 
 ### Gate Failure Handling
 
@@ -243,76 +238,41 @@ Gate evaluates ──┬── PASS ──▶ advance to next phase
                                 └── verification fail ──▶ reroute to implementation
 ```
 
-Force-advance decisions are logged to `.factory/artifacts/decisions.md` with timestamps and rationale.
-
 ## Feedback Loops
 
 ### Retry with Context
 
-When a phase fails its gate, the runner restarts the same phase with feedback injected into the prompt:
+When a phase fails its gate, the orchestrator restarts the same phase with feedback injected into the prompt:
 
 ```
 "IMPORTANT: This is retry #3. Previous attempt failed with feedback:
-research.md missing Required Screens section (needed for design integration).
+plan.md missing TDD specs section.
 Address this feedback specifically."
 ```
 
 The agent gets a fresh context window but knows exactly what went wrong.
 
-### Reroute Mechanism
-
-The implementer can request architectural changes mid-execution by writing `.factory/reroute.json`:
-
-```json
-{
-  "from": "implementation",
-  "to": "architecture",
-  "task_id": "task-3",
-  "reason": "API contract doesn't account for pagination",
-  "suggestion": "Add ?page=1&per_page=20 to GET /api/payment-methods"
-}
-```
-
-The runner detects this file, resets the target phase to `pending`, and re-runs it with the reroute feedback. This allows the pipeline to self-correct without human intervention.
-
 ### Verification → Implementation Loop
 
-When the reviewer issues a FAIL verdict, the runner automatically routes back to implementation (not verification) so the implementer can fix the issues. The review feedback is stored in the implementation gate's feedback field so the implementer knows exactly what to fix.
+When the verifier issues a FAIL verdict, the orchestrator automatically routes back to implementation (not planning) so the implementer can fix the issues. The review feedback is stored in the implementation gate's feedback field.
+
+### Cycle Detection
+
+If the same phase fails with the same error 3 consecutive times, the orchestrator force-advances to prevent infinite loops. This is tracked in `state.json` under `cycle_detection`.
 
 ## Process Lifecycle
 
-### Session Isolation
-
-Each phase runs as a separate `claude -p` process with:
-- Its own session name (`factory-{phase}-{timestamp}`)
-- `--dangerously-skip-permissions` (unattended execution)
-- `--allowedTools` restricting available tools per agent role
-- `--output-format stream-json` for real-time monitoring
-- Stream output redirected to `.factory/logs/{phase}.stream`
-
-No two phases share a context window. This prevents context overflow and enforces phase boundaries.
-
 ### Staleness Detection
 
-The runner monitors each `claude -p` process for output staleness:
+The heartbeat file (`.factory/heartbeat`) is touched on every tool use via a PostToolUse SDK hook. The orchestrator tracks `lastActivityTime` in-process:
 
 ```
-Phase starts ──▶ monitor stream file size every 10s
+Phase running ──▶ check lastActivityTime every 10s
                        │
-                       ├── stream growing ──▶ agent is active, reset timer
+                       ├── recent activity ──▶ continue
                        │
-                       └── stream stale ──▶ check duration
-                                                │
-                                                ├── < threshold ──▶ keep waiting
-                                                │
-                                                └── >= threshold ──▶ kill process
+                       └── stale >= 300s ──▶ abort (AbortController)
 ```
-
-Thresholds vary by phase:
-- **Default**: 180s (3 min)
-- **Design**: 300s (5 min) — Pencil runs locally
-- **Architecture/Planning**: 420s (7 min) — extended thinking time
-- **Implementation**: 300s (5 min) — builds/installs can be slow
 
 ### API Error Recovery
 
@@ -324,145 +284,132 @@ Attempt 1 ──▶ fail ──▶ wait 30s ──▶ Attempt 2 ──▶ fail �
                                                           (cap at 300s, max 5 attempts)
 ```
 
-API errors don't count against the phase iteration limit — the agent shouldn't be penalized for infrastructure issues.
+API errors don't count against the phase iteration limit.
 
-## Watchdog (factory-heartbeat.sh)
+### Wall-Clock Timeouts
+
+- **Per-phase**: 3600s (1 hour) — enforced via `setTimeout` + `AbortController`
+- **Factory-wide**: 14400s (4 hours) — checked at the start of each phase loop
+
+## Watchdog (`heartbeat.ts`)
 
 The heartbeat monitor runs as an outer wrapper for unattended/overnight execution:
 
 ```
 ┌─────────────────────────────────────────┐
-│  factory-heartbeat.sh                   │
+│  heartbeat.ts                           │
 │                                         │
 │  every 30s:                             │
 │    1. check .factory/heartbeat mtime    │
 │    2. if stale > 300s → kill runner     │
 │    3. if done file exists → exit clean  │
 │    4. if runner dead → restart          │
-│       (exponential backoff, max 5x)     │
+│       (max 5 restarts)                  │
 │    5. clean up orphaned claude procs    │
 └─────────────────────────────────────────┘
 ```
 
-The heartbeat file is touched by:
-- The runner's monitoring loop (every 10s while a phase runs)
-- The gate-check.sh Stop hook (on every gate evaluation)
-- Agent prompts instruct agents to touch it during long operations
+Uses `Bun.spawn()` with `detached: true`. Sends SIGTERM first, waits 3s, then SIGKILL if needed.
 
 ### Deployment Modes
 
 | Mode | Command | Survives |
 |------|---------|----------|
 | Interactive | `/factory spec.json` | Terminal only |
-| tmux | `./scripts/factory-heartbeat.sh spec.json` | Terminal close |
-| launchd | `./scripts/factory-install.sh spec.json` | Reboot |
+| tmux | `bun run ts/src/heartbeat.ts spec.json ./project` | Terminal close |
+| launchd | `bun run ts/src/install.ts spec.json ./project` | Reboot |
 
-The launchd installer creates a `~/Library/LaunchAgents` plist with KeepAlive enabled, so the factory auto-restarts if the process crashes.
+The launchd installer creates a `~/Library/LaunchAgents` plist with KeepAlive enabled.
 
 ## Monitoring
 
-### Live Dashboard (factory-watch.sh)
+### CLI Tools
 
-Terminal UI refreshing every 3s showing:
-- Phase status (DONE / RUNNING / FAILED / pending)
-- Heartbeat age + staleness warning
-- Gate pass/fail results
-- Artifact file sizes
-- Current agent activity (parsed from stream)
-- Log tail
+| Tool | Command | Description |
+|------|---------|-------------|
+| **Live Dashboard** | `bun run ts/src/monitor/watch.ts` | Terminal UI refreshing every 3s: phase status, heartbeat, gates, artifacts, current activity, log tail |
+| **Stream Parser** | `bun run ts/src/monitor/tail.ts` | Tails `.stream` NDJSON, color-codes tool calls (Read=blue, Edit=yellow, Bash=magenta, Agent=red) |
+| **Status Snapshot** | `bun run ts/src/monitor/status.ts` | One-shot: phases, iterations, reroutes, artifacts, task count, verdict |
 
-### Stream Parser (factory-tail.sh)
+### Frontend Dashboard
 
-Tails the active phase's `.stream` file and renders agent activity:
-- Tool calls color-coded by type (Read=blue, Edit=yellow, Write=green, Bash=cyan)
-- Thinking blocks (dim magenta)
-- File paths and commands extracted from tool parameters
-- Session completion with duration and cost
+The Next.js app (`frontend/`) provides a web-based monitoring interface:
 
-### Status Snapshot (factory-status.sh)
+**Stack**: Next.js 16 (App Router), SQLite + Drizzle ORM, shadcn/ui, Tailwind CSS
 
-One-shot query showing all phase statuses, iteration counts, reroutes, artifact sizes, and task completion.
+**Database Schema**:
+- `projects` — registered project directories with factory home paths
+- `runs` — run history per project (spec, PID, timestamps, verdict)
 
-## Design Integration (Pencil MCP)
+**How it reads factory state**: The dashboard reads `.factory/state.json`, `.factory/heartbeat`, and `.factory/logs/` directly from disk — the same files the CLI tools consume. No separate data pipeline.
 
-When the spec includes a `design` object, the pipeline adds a design phase between research and architecture.
+**How it starts runs**: The `POST /api/projects/[id]/runs` endpoint spawns `ts/src/heartbeat.ts` as a detached child process with `child_process.spawn()`. Same entry point as running from CLI.
 
-### Data Flow
+**Real-time updates**: The `POST /api/projects/[id]/events` endpoint provides Server-Sent Events (SSE). The dashboard polls state.json and streams phase transitions, gate results, and log updates to connected clients.
 
-```
-Research ──▶ Required Screens table
-                    │
-                    ▼
-Design ──▶ design.pen (Pencil file, queryable via MCP)
-           design-system.md (color tokens, typography, spacing)
-           design-manifest.json (screen names, node IDs, descriptions)
-           screenshots/*.png (visual reference)
-                    │
-                    ▼
-Architecture ──▶ Visual Design section transcribed from design-system.md
-                 Queries design.pen for precise CSS values
-                    │
-                    ▼
-Implementation ──▶ Views screenshots for visual reference
-                   Queries design.pen for exact colors, fonts, spacing
-                   Uses design tokens as CSS variables
-                    │
-                    ▼
-Verification ──▶ Checks design fidelity against screenshots
-```
+**Key API routes**:
 
-### Two Paths
-
-**Path A** (generate from scratch): No `penFile` in spec. Designer uses Pencil guidelines + style guide to create all screens listed in Required Screens.
-
-**Path B** (ingest existing): `penFile` points to an existing `.pen` file. Designer opens it, validates coverage against Required Screens, and generates any missing screens.
-
-### Pencil Tool Access
-
-| Phase | Access Level | Tools |
-|-------|-------------|-------|
-| Design | Full | batch_design, batch_get, set_variables, export_nodes, get_guidelines, get_style_guide, open_document, get_screenshot, etc. |
-| Architecture | Read-only | batch_get, get_variables, search_all_unique_properties, get_screenshot, snapshot_layout |
-| Implementation | Read-only | Same as architecture |
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/projects` | GET/POST | List all projects / create new |
+| `/api/projects/[id]` | GET/DELETE | Project details / remove |
+| `/api/projects/[id]/runs` | POST | Start new factory run |
+| `/api/projects/[id]/events` | POST | SSE event stream |
+| `/api/projects/[id]/logs/[phase]` | GET | Phase log tail |
+| `/api/projects/[id]/artifacts/[name]` | GET | Download artifact |
+| `/api/projects/[id]/preview` | GET | Preview server status |
+| `/api/projects/[id]/stop` | POST | Stop active run |
 
 ## Resumability
 
-The factory is designed to resume from any point after a crash:
+The factory resumes from any point after a crash:
 
-1. Runner checks `state.json` for `current_phase`
-2. `next_pending_phase()` skips all `completed` phases
+1. Orchestrator checks `state.json` for `current_phase`
+2. `nextPendingPhase()` skips all `completed` phases
 3. `spec.json` is preserved (not re-normalized on resume)
 4. Implementation checks `.factory/artifacts/tasks/` for existing completion reports and skips finished tasks
 5. Heartbeat watchdog detects the runner died and restarts it
 
-## CI Simulation (ci-simulate.sh)
+## Sub-Agent Parallelism
 
-Multi-language CI checker that auto-detects the project stack:
+The implementer doesn't write code directly. It spawns sub-agents using Claude Code's `Agent` tool with `isolation: "worktree"`:
 
-| Language | Lint | Types | Test | Build |
-|----------|------|-------|------|-------|
-| Node.js | `npm run lint` | `tsc --noEmit` | `npm test` | `npm run build` |
-| Python | `ruff check` | `mypy .` | `pytest` | — |
-| Go | `go vet ./...` | — | `go test ./...` | `golangci-lint run` |
+```
+Implementer reads plan.md
+    │
+    ├── Wave 1 (parallel):
+    │   ├── Agent (worktree) → Task 1
+    │   └── Agent (worktree) → Task 2
+    │   merge worktrees, run tests
+    │
+    ├── Wave 2 (parallel):
+    │   ├── Agent (worktree) → Task 3
+    │   ├── Agent (worktree) → Task 4
+    │   └── Agent (worktree) → Task 5
+    │   merge worktrees, run tests
+    │
+    └── Wave 3:
+        └── Agent (worktree) → Task 6 (integration)
+        merge, run tests
+```
 
-Returns PASS/FAIL per check, exit code 0 (all pass) or 1 (any fail).
+Each sub-agent works in a git worktree — an isolated copy of the repo. No merge conflicts during parallel execution. After each wave, the implementer merges back and verifies tests pass before moving to the next wave.
 
 ## Key Design Decisions
 
-**Why separate `claude -p` sessions per phase?**
-Context windows are finite. A full factory run can generate hundreds of thousands of tokens across research, architecture, and implementation. Separate sessions ensure each agent gets a clean context focused on its task.
+See [DECISIONS.md](DECISIONS.md) for the full architectural decision log.
 
-**Why bash for orchestration?**
-Zero dependencies. The factory runs anywhere Claude Code runs. Bash handles file I/O, process management, and JSON manipulation (via `jq`) without requiring Node.js, Python, or any runtime.
+**Why `query()` instead of `claude -p`?**
+The Agent SDK's `query()` function gives us typed, in-process control: AbortController for timeouts, SDK hooks for gate checks and heartbeat, AsyncGenerator for streaming. The old `claude -p` approach required shell-level process management, stream file parsing, and external gate scripts.
 
 **Why Stop hooks for gates?**
-Claude Code's Stop hook mechanism lets us intercept the agent before it exits. If the output doesn't meet criteria, we block the stop and the agent continues — this is cheaper and faster than killing the process and starting a new session.
-
-**Why atomic state writes?**
-The dashboard (`factory-watch.sh`) reads `state.json` concurrently while the runner writes it. Writing to a `.tmp` file and atomically moving it prevents the dashboard from reading a half-written JSON file.
+It's cheaper to block an agent from stopping than to kill and restart a session. The agent continues in the same context window with full history, addressing the gate feedback immediately.
 
 **Why heartbeat files instead of process monitoring?**
-A running process doesn't mean a working agent. The agent could be stuck in an infinite loop, waiting on a hung API call, or in a retry cycle. Heartbeat file mtime proves the agent is making forward progress, not just alive.
+A running process doesn't mean a working agent. The heartbeat file mtime proves the agent is making forward progress, not just alive.
+
+**Why atomic state writes?**
+The dashboard and CLI tools read `state.json` concurrently while the orchestrator writes it. Writing to a `.tmp` file and atomically renaming prevents readers from seeing partial JSON.
 
 **Why force-advance after N iterations?**
-Perfection is the enemy of done. If a phase can't pass its gate after 5 attempts, the output is likely "good enough" — the downstream phases can often compensate. Forcing an advance prevents the pipeline from getting stuck indefinitely. All force decisions are logged for human review.
+Perfection is the enemy of done. If a phase can't pass its gate after 10 attempts, the output is likely good enough — downstream phases can often compensate. All force decisions are logged as alerts.

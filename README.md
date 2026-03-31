@@ -1,32 +1,26 @@
 # Software Factory
 
-An autonomous software factory built on [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Give it a feature spec, get back a deployable pull request — no human intervention until final review.
+An autonomous software factory built on [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk). Give it a feature spec, get back a deployable pull request — no human intervention until final review.
 
 ```
-spec.json ──▶ Research ──▶ Design ──▶ Architecture ──▶ Planning ──▶ Implementation ──▶ Verification ──▶ PR
-                 │            │            │               │              │                  │
-              research.md  design.pen  architecture.md  plan.md     code + tests        review.md
+spec.json ──▶ Planning ──▶ Implementation ──▶ Verification ──▶ PR
+                 │               │                  │
+             plan.md      code + tests          review.md
+                                                README.md
+                                                 QA.md
 ```
 
-Six specialized agents coordinate through a 7-phase pipeline with quality gates, automatic retries, and feedback loops. Each phase runs as an isolated `claude -p` session with its own context window.
+Three specialized agents coordinate through a 3-phase pipeline with quality gates, automatic retries, and feedback loops. Each phase runs as an isolated `query()` call via the Claude Agent SDK, with its own context window and tool restrictions.
 
 ## Quick Start
 
 ### Prerequisites
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+- [Bun](https://bun.sh) runtime
 - macOS or Linux
 
-### 1. Clone into your project
-
-```bash
-# Clone the factory into your existing project
-git clone https://github.com/SebastianGarces/software-factory.git .factory-setup
-cp -r .factory-setup/.claude .factory-setup/scripts .factory-setup/templates .
-rm -rf .factory-setup
-```
-
-### 2. Write a spec
+### 1. Write a spec
 
 ```json
 {
@@ -35,50 +29,54 @@ rm -rf .factory-setup
 }
 ```
 
-### 3. Run the factory
+### 2. Run the factory
 
 ```bash
 # Interactive (inside Claude Code)
 /factory spec.json
 
-# Overnight (in tmux)
-./scripts/factory-heartbeat.sh spec.json
+# Programmatic (in tmux or background)
+bun run ts/src/index.ts spec.json /path/to/project
+
+# With watchdog (auto-restart on stalls)
+bun run ts/src/heartbeat.ts spec.json /path/to/project
 
 # As macOS background service
-./scripts/factory-install.sh spec.json
+bun run ts/src/install.ts spec.json /path/to/project
 ```
 
-### 4. Monitor progress
+### 3. Monitor progress
 
 ```bash
-# Live dashboard (in a second tmux pane)
-./scripts/factory-watch.sh
+# Live terminal dashboard
+bun run ts/src/monitor/watch.ts /path/to/project
 
 # One-shot status check
-./scripts/factory-status.sh
+bun run ts/src/monitor/status.ts /path/to/project
 
 # Stream agent activity
-./scripts/factory-tail.sh
+bun run ts/src/monitor/tail.ts /path/to/project
+
+# Web dashboard (optional)
+cd frontend && npm run dev    # http://localhost:4040
 ```
 
 ## How It Works
 
 ```
 ┌───────────────────────────────────────────────────────┐
-│  factory-heartbeat (watchdog)                         │
-│  • monitors liveness every 30s                        │
-│  • restarts stalled processes (max 5 attempts)        │
-│  • cleans up orphaned claude sessions                 │
+│  heartbeat.ts (watchdog)                              │
+│  Monitors liveness every 30s, restarts stalled        │
+│  processes (max 5 attempts), cleans up orphans         │
 └───────────────────┬───────────────────────────────────┘
                     │ spawns & monitors
                     ▼
 ┌───────────────────────────────────────────────────────┐
-│  factory-runner (orchestrator)                        │
-│  • runs each phase as a separate `claude -p` call     │
-│  • evaluates quality gates after each phase           │
-│  • retries failed phases with feedback (max 5x)       │
-│  • handles reroutes (impl → architecture)             │
-│  • assembles final PR                                 │
+│  factory.ts (orchestrator)                            │
+│  Runs each phase as a separate query() call via       │
+│  the Claude Agent SDK. Evaluates quality gates,       │
+│  retries failed phases with feedback (max 10x),       │
+│  handles reroutes (verification → implementation).    │
 └───────────────────────────────────────────────────────┘
 ```
 
@@ -86,25 +84,23 @@ rm -rf .factory-setup
 
 | Agent | Model | Role | Tools |
 |-------|-------|------|-------|
-| **Researcher** | Sonnet | Explores codebase, extracts conventions, maps integration points | Read-only |
-| **Designer** | Opus | Generates UI designs via Pencil MCP | Pencil MCP |
-| **Architect** | Opus | Designs data models, API contracts, component trees | Read-only |
-| **Implementer** | Sonnet | TDD cycle: red → green → refactor | Full tools, worktree isolation |
-| **Reviewer** | Sonnet | Runs tests, checks conventions, security review | Read + Bash |
-| **Orchestrator** | Opus | Coordinates pipeline, evaluates gates, makes judgment calls | All tools |
+| **Planner** | Opus | Surveys codebase, designs data model + API + components + visual direction, decomposes into tasks with TDD specs | Read, Grep, Glob, Bash, Agent |
+| **Implementer** | Opus | Orchestrates sub-agents in parallel (worktree isolation), executes TDD cycle per task | All tools |
+| **Verifier** | Opus | Runs tests/lint/typecheck, reviews code + UI quality, browser verification, writes verdict | Read, Grep, Glob, Bash, Agent |
 
 ### Quality Gates
 
-Every phase is evaluated by a quality gate before advancing. Gates check:
+Every phase is evaluated by a quality gate before advancing:
 
-- **Research**: File paths cited (not generic), required sections present
-- **Design**: All screens generated, design system extracted, screenshots exported
-- **Architecture**: Data model + API contract present, security section included
-- **Planning**: Tasks have acceptance criteria + TDD specs, no circular dependencies
-- **Implementation**: All tests pass, no lint errors, task reports complete
-- **Verification**: PASS verdict, no critical security findings
+- **Plan**: `plan.md` exists, contains Data Model + API/Routes + Components + Tasks + Acceptance Criteria + TDD specs, >1000 bytes
+- **Implementation**: Task completion reports exist for all planned tasks
+- **Verification**: `review.md` exists with PASS verdict, `README.md` and `QA.md` created in project root
 
-Failed gates retry the phase with specific feedback. After 5 failures, the orchestrator force-advances with the best output and logs the decision.
+Gates operate at two levels:
+1. **SDK Stop hooks** — block the agent from stopping mid-session if gate criteria aren't met (the agent continues in the same context)
+2. **Post-session evaluation** — after the session ends, update state and decide to retry or advance
+
+Failed gates retry the phase with specific feedback. After 10 failures, the orchestrator force-advances and logs the decision.
 
 ### Feedback Loops
 
@@ -112,14 +108,14 @@ Failed gates retry the phase with specific feedback. After 5 failures, the orche
 Agent does work ──▶ Gate evaluates ──┬── pass ──▶ next phase
                                      │
                                      └── fail ──▶ retry with feedback
-                                                  (max 5 iterations)
+                                                  (max 10 iterations)
 ```
 
-Implementation can also request **reroutes** — if a task discovers an architecture gap, it writes a `reroute.json` that sends the pipeline back to the architect with specific feedback.
+When verification fails, the pipeline automatically routes back to implementation with the verifier's feedback so the implementer knows exactly what to fix.
 
 ## Spec Format
 
-Minimal spec:
+Minimal:
 
 ```json
 {
@@ -143,11 +139,6 @@ Full spec with all options:
     { "name": "status", "kind": "enum", "values": ["scheduled", "completed", "cancelled"] }
   ],
   "ui": { "list": true, "detail": true, "form": true, "search": true },
-  "design": {
-    "topic": "web-app",
-    "styleTags": ["professional", "calm", "healthcare"],
-    "designBrief": "Clean, accessible design. Calming blue palette."
-  },
   "constraints": {
     "max_iterations": 5,
     "target_branch": "main"
@@ -166,31 +157,43 @@ You can also pass a markdown brief or plain text:
 ```
 .claude/
 ├── agents/                        # Agent personas
-│   ├── orchestrator/AGENT.md      # Pipeline coordinator
-│   ├── researcher/AGENT.md        # Codebase explorer
-│   ├── designer/AGENT.md          # UI design via Pencil
-│   ├── architect/AGENT.md         # Solution designer
-│   ├── implementer/AGENT.md       # TDD coder
-│   └── reviewer/AGENT.md         # QA specialist
+│   ├── planner/AGENT.md           # Research + architecture + task planning
+│   ├── implementer/AGENT.md       # TDD coder (orchestrates sub-agents)
+│   └── verifier/AGENT.md          # QA + PR assembly
 ├── skills/                        # Slash commands
 │   ├── factory/SKILL.md           # /factory — full pipeline
-│   ├── factory-research/SKILL.md  # /factory-research — research only
-│   ├── factory-design/SKILL.md    # /factory-design — design only
-│   ├── factory-plan/SKILL.md      # /factory-plan — architecture + planning
-│   ├── factory-implement/SKILL.md # /factory-implement — implementation
-│   └── factory-verify/SKILL.md    # /factory-verify — verification
-├── hooks/
-│   └── gate-check.sh             # Quality gate evaluator (Stop hook)
+│   ├── factory-implement/SKILL.md # /factory-implement — implementation only
+│   └── factory-verify/SKILL.md    # /factory-verify — verification only
 └── settings.json                  # Claude Code settings
 
-scripts/
-├── factory-runner.sh              # Main orchestrator (phase execution)
-├── factory-heartbeat.sh           # Watchdog (liveness + auto-restart)
-├── factory-watch.sh               # Live terminal dashboard
-├── factory-status.sh              # Status snapshot
-├── factory-tail.sh                # Stream activity parser
-├── factory-install.sh             # macOS launchd service installer
-└── ci-simulate.sh                 # Multi-language CI checker
+ts/                                # TypeScript orchestrator
+├── package.json
+└── src/
+    ├── index.ts                   # CLI entry point
+    ├── factory.ts                 # Pipeline orchestrator (query() loop)
+    ├── heartbeat.ts               # Watchdog (liveness + auto-restart)
+    ├── state.ts                   # State machine + initialization
+    ├── agents.ts                  # Model + tool config per phase
+    ├── gates.ts                   # Quality gate evaluation
+    ├── hooks.ts                   # SDK hooks (Stop gate, heartbeat)
+    ├── prompts.ts                 # Phase-specific prompt builders
+    ├── types.ts                   # Type definitions
+    ├── utils.ts                   # File I/O, logging, time
+    ├── install.ts                 # macOS launchd service installer
+    ├── ci-simulate.ts             # Multi-language CI checker
+    └── monitor/
+        ├── watch.ts               # Live terminal dashboard
+        ├── status.ts              # One-shot status snapshot
+        └── tail.ts                # Stream activity parser
+
+frontend/                          # Next.js monitoring dashboard
+├── package.json
+├── src/
+│   ├── app/                       # App Router pages + API routes
+│   ├── components/                # UI components (shadcn/ui)
+│   ├── lib/factory/               # Factory state readers + queries
+│   └── db/                        # SQLite + Drizzle (projects, runs)
+└── drizzle.config.ts
 
 templates/
 ├── gate-criteria.md               # Gate evaluation standards
@@ -206,71 +209,87 @@ Created at runtime for each factory run:
 .factory/
 ├── state.json                     # Pipeline state machine
 ├── spec.json                      # Normalized input spec
-├── heartbeat                      # Liveness signal (touched every ~10s)
+├── heartbeat                      # Liveness signal (touched every tool use)
 ├── done                           # Completion marker
 ├── artifacts/
-│   ├── research.md                # Codebase analysis
-│   ├── design.pen                 # Pencil design file
-│   ├── design-system.md           # Design tokens
-│   ├── design-manifest.json       # Screen inventory
-│   ├── screens/*/screenshot.png   # Exported design screenshots
-│   ├── architecture.md            # Technical design
-│   ├── plan.md                    # Task breakdown with TDD specs
+│   ├── plan.md                    # Planning output
 │   ├── tasks/task-*-complete.md   # Per-task completion reports
-│   ├── review.md                  # QA review
-│   └── decisions.md               # Forced orchestrator decisions
+│   └── review.md                  # Verification output
 ├── logs/
-│   ├── *.stream                   # Raw stream JSON (real-time)
+│   ├── *.stream                   # Raw NDJSON from query() (real-time)
 │   ├── *.log                      # Plain text logs
 │   └── heartbeat.log              # Watchdog activity
-└── reroute.json                   # Architecture change request
+└── reroute.json                   # Architecture change request (if any)
 ```
 
 ## Running Individual Phases
 
-You don't have to run the full pipeline. Each phase has its own slash command:
+You don't have to run the full pipeline. Two phase-specific slash commands are available:
 
 ```bash
-/factory-research spec.json     # Just explore the codebase
-/factory-design spec.json       # Just generate designs (needs research.md)
-/factory-plan spec.json         # Just architect + plan (needs research.md)
-/factory-implement              # Just implement tasks (needs plan.md)
-/factory-verify                 # Just run verification (needs implementation)
+/factory-implement              # Implementation only (needs plan.md)
+/factory-verify                 # Verification only (needs implementation)
 ```
 
-## Design Integration
+## Frontend Dashboard
 
-The factory optionally integrates with [Pencil](https://pencil.li) (via MCP) for UI design generation. Add a `design` object to your spec:
+The optional Next.js dashboard (`frontend/`) provides a web UI for managing and monitoring factory runs.
 
-```json
-{
-  "design": {
-    "topic": "web-app",
-    "styleTags": ["calm", "modern", "minimal"],
-    "designBrief": "Clean SaaS dashboard like Linear"
-  }
-}
+### Features
+
+- **Project management**: Register projects, view run history, start new runs
+- **Live monitoring**: Real-time phase progress, gate statuses, artifact sizes
+- **Event stream**: SSE-powered live view of agent activity (tool calls, text output)
+- **Artifact viewer**: Read plan.md and review.md rendered as markdown
+- **Log tail**: Phase log viewer with syntax highlighting
+- **Preview integration**: Live preview of the app being built
+
+### Running the Dashboard
+
+```bash
+cd frontend
+npm install
+npm run db:push          # Initialize SQLite database
+npm run dev              # Start on http://localhost:4040
 ```
 
-**Path A** (no existing designs): Factory generates designs from scratch using Pencil, guided by the style tags and brief.
+### How It Connects to the Factory
 
-**Path B** (existing `.pen` file): Factory ingests your Pencil file, validates coverage against required screens, and fills gaps.
+The dashboard reads `.factory/state.json` and `.factory/logs/` directly from disk — the same files the CLI monitoring tools use. When you start a new run from the dashboard, it spawns `ts/src/heartbeat.ts` as a detached child process, the same entry point as running from the command line.
 
-Design artifacts flow downstream — the architect extracts exact colors, fonts, and spacing from the design system, and the implementer queries the Pencil file for precise CSS values.
+```
+┌──────────────────────┐       ┌─────────────────────┐
+│  Frontend Dashboard  │       │  CLI Monitoring      │
+│  (Next.js on :4040)  │       │  (watch/status/tail) │
+└──────────┬───────────┘       └──────────┬──────────┘
+           │ reads                        │ reads
+           ▼                              ▼
+    ┌──────────────────────────────────────────┐
+    │         .factory/ (on disk)              │
+    │  state.json, logs/, artifacts/           │
+    └──────────────────┬───────────────────────┘
+                       │ written by
+                       ▼
+              ┌──────────────────┐
+              │   factory.ts     │
+              │   (orchestrator) │
+              └──────────────────┘
+```
 
 ## Configuration
 
-Environment variables for `factory-runner.sh`:
+Environment variables for the TypeScript runner:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PHASE_TIMEOUT` | `3600` | Max seconds per phase |
+| `MAX_ITERATIONS` | `10` | Max retries per phase |
+| `PHASE_TIMEOUT` | `3600` | Max seconds per phase (1 hour) |
 | `FACTORY_TIMEOUT` | `14400` | Max total seconds (4 hours) |
-| `MAX_ITERATIONS` | `5` | Max retries per phase |
 | `API_RETRY_MAX` | `5` | API error retry attempts |
-| `STALL_THRESHOLD` | `300` | Heartbeat stale threshold (seconds) |
-| `CHECK_INTERVAL` | `30` | Watchdog check frequency (seconds) |
-| `MAX_RESTARTS` | `5` | Max watchdog restart attempts |
+| `API_RETRY_INITIAL_WAIT` | `30` | Initial backoff wait (seconds) |
+| `MAX_TURNS` | — | Optional limit on conversation turns per phase |
+| `MAX_GATE_BLOCKS` | `10` | Max Stop hook blocks before allowing stop |
+| `FACTORY_HOME` | auto-detected | Path to software-factory repo |
 
 ## License
 

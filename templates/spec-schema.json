@@ -77,40 +77,6 @@
       },
       "description": "Override factory defaults"
     },
-    "design": {
-      "type": "object",
-      "properties": {
-        "penFile": {
-          "type": "string",
-          "description": "Path to an existing Pencil .pen file. If provided, designs are ingested from this file. If omitted, new designs are generated via Pencil."
-        },
-        "topic": {
-          "type": "string",
-          "enum": ["web-app", "mobile-app", "landing-page", "design-system"],
-          "default": "web-app",
-          "description": "Design topic for Pencil guidelines and style generation"
-        },
-        "styleTags": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "Style tags for Pencil style guide (e.g., ['calm', 'modern', 'webapp'])"
-        },
-        "styleGuide": {
-          "type": "string",
-          "description": "Optional Pencil style guide name to apply"
-        },
-        "maxDesignIterations": {
-          "type": "number",
-          "default": 3,
-          "description": "Max design iteration attempts for design gate failures"
-        },
-        "designBrief": {
-          "type": "string",
-          "description": "Optional additional design direction (tone, style references, brand constraints). E.g., 'Clean SaaS dashboard like Linear. Muted teal palette with editorial typography.'"
-        }
-      },
-      "description": "Pencil design integration. When present, enables the design phase which generates or ingests UI designs from Pencil before architecture."
-    },
     "preview": {
       "type": "object",
       "properties": {

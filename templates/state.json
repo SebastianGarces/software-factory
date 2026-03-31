@@ -1,40 +1,9 @@
 {
-  "factory_version": "1.0.0",
+  "factory_version": "2.0.0",
   "spec_file": "",
   "project_dir": "",
-  "current_phase": "intake",
+  "current_phase": "planning",
   "phases": {
-    "intake": {
-      "status": "pending",
-      "session_id": "",
-      "iterations": 0,
-      "started_at": "",
-      "completed_at": ""
-    },
-    "research": {
-      "status": "pending",
-      "session_id": "",
-      "iterations": 0,
-      "started_at": "",
-      "completed_at": ""
-    },
-    "design": {
-      "status": "pending",
-      "session_id": "",
-      "iterations": 0,
-      "started_at": "",
-      "completed_at": "",
-      "pen_file": "",
-      "screens_generated": 0,
-      "path": ""
-    },
-    "architecture": {
-      "status": "pending",
-      "session_id": "",
-      "iterations": 0,
-      "started_at": "",
-      "completed_at": ""
-    },
     "planning": {
       "status": "pending",
       "session_id": "",
@@ -57,19 +26,9 @@
       "iterations": 0,
       "started_at": "",
       "completed_at": ""
-    },
-    "pr_assembly": {
-      "status": "pending",
-      "session_id": "",
-      "iterations": 0,
-      "started_at": "",
-      "completed_at": ""
     }
   },
   "gates": {
-    "research": { "passed": false, "feedback": "", "evaluated_at": "" },
-    "design": { "passed": false, "feedback": "", "evaluated_at": "" },
-    "architecture": { "passed": false, "feedback": "", "evaluated_at": "" },
     "plan": { "passed": false, "feedback": "", "evaluated_at": "" },
     "implementation": { "passed": false, "feedback": "", "evaluated_at": "" },
     "verification": { "passed": false, "feedback": "", "evaluated_at": "" }

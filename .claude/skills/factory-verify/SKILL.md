@@ -1,6 +1,6 @@
 ---
 name: factory-verify
-description: Run the verification phase of the software factory. Reviews implementation against architecture, conventions, and acceptance criteria. Produces review.md with PASS/FAIL verdict. Use when the user wants to verify generated code.
+description: Run the verification phase of the software factory. Reviews implementation against plan, conventions, and acceptance criteria. Produces review.md with PASS/FAIL verdict. On PASS, creates README.md, QA.md, and commits. Use when the user wants to verify generated code.
 ---
 
 You are running the **Verification Phase** of the software factory as a standalone operation.
@@ -8,8 +8,6 @@ You are running the **Verification Phase** of the software factory as a standalo
 ## Prerequisites
 
 Implementation must be complete. Check for:
-- `.factory/artifacts/research.md`
-- `.factory/artifacts/architecture.md`
 - `.factory/artifacts/plan.md`
 - At least one `.factory/artifacts/tasks/task-*-complete.md` file
 
@@ -20,25 +18,30 @@ Implementation must be complete. Check for:
 
 ## Execution
 
-1. **Spawn the reviewer agent:**
+1. **Spawn the verifier agent:**
 ```
 Review all code produced during the implementation phase.
-Read research.md for conventions, architecture.md for design, plan.md for acceptance criteria.
-Run the full test suite, linter, and type checker.
-Write your review to .factory/artifacts/review.md
+Read plan.md for design decisions and acceptance criteria.
+Run bun test, bun run lint, bunx tsc --noEmit.
+Test in browser via agent-browser (advisory).
+Write your review to .factory/artifacts/review.md.
+If PASS: also create README.md, QA.md, and commit all changes.
 ```
 
 2. **Read the review.** Check the verdict.
 
 3. **If PASS:**
-   - Congratulate. The code is ready for PR assembly.
-   - Suggest running `/factory` to create the PR, or the user can review manually.
+   - The verifier has already created README.md, QA.md, and committed.
+   - Report success to the user. Code is ready for review/push.
 
 4. **If FAIL:**
    - Present the Required Fixes section to the user.
    - Offer to re-run `/factory-implement` for specific tasks that need fixing.
-   - Or re-run the full verification after the user makes manual fixes.
+   - Or re-run verification after the user makes manual fixes.
 
 ## Output
 
-`.factory/artifacts/review.md` — full review with PASS/FAIL verdict and detailed findings.
+- `.factory/artifacts/review.md` — full review with PASS/FAIL verdict
+- `README.md` — project documentation (on PASS)
+- `QA.md` — manual testing checklist (on PASS)
+- Git commit with all changes (on PASS)
